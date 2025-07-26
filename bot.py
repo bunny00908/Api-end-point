@@ -10,11 +10,12 @@ API_ID = 28232616
 API_HASH = "82e6373f14a917289086553eefc64afe"
 BOT_TOKEN = "8463287566:AAEHL1B2iCL0EcTpKN9soRKncHMAudBuAvs"
 
-CARD_CHECK_BOT_ID = 5366864997
+CARD_CHECK_BOT_ID = 5366864997  # @VoidxBot
 SOURCE_GROUPS = [-4759483285]
 TARGET_CHANNELS = ["@hybuabu"]
 
 processed_ids = set()
+message_cache = {}
 
 # === LOGGING ===
 logging.basicConfig(
@@ -47,7 +48,6 @@ async def get_bin_data(bin_code):
 # === PARSE FUNCTION ===
 def parse_message(text):
     try:
-        logging.debug(f"Parsing message: {text}")
         cc_match = re.search(
             r'CC[:\s]*([0-9]{13,19})[| ](\d{1,2})[| ](\d{2,4})[| ](\d{3,4})',
             text, re.IGNORECASE
@@ -78,10 +78,10 @@ def parse_message(text):
         logging.error(f"Error parsing message: {str(e)}")
         return None
 
-# === FORWARD DECISION ===
+# === SHOULD FORWARD ===
 def should_forward(response):
     response = (response or "").lower()
-    return any(keyword in response for keyword in ["charge", "charged", "approved", "success", "live"])
+    return any(keyword in response for keyword in ["charged", "charge", "success", "approved", "live"])
 
 # === SEND TO CHANNEL ===
 async def send_to_channels(formatted_text):
@@ -105,59 +105,57 @@ async def send_to_channels(formatted_text):
             logging.error(f"Failed to send to {channel}: {str(e)}")
     return False
 
-# === MAIN HANDLER ===
-async def handle_card_messages(client, message: Message):
-    try:
-        text = message.text or message.caption or ""
-        logging.info(f"[MSG] {text[:80]}...")
+# === HANDLE MESSAGE LOGIC ===
+async def process_message(message_id, full_text):
+    card_data = parse_message(full_text)
+    if not card_data:
+        logging.debug("❌ No card data parsed.")
+        return
 
-        card_data = parse_message(text)
-        if not card_data:
-            logging.debug("No card data parsed.")
-            return
+    if not should_forward(card_data["response"]):
+        logging.debug(f"❌ Response not valid for forwarding: {card_data['response']}")
+        return
 
-        logging.debug(f"Parsed response: {card_data['response']}")
-        if not should_forward(card_data["response"]):
-            logging.debug(f"Not forwarding: {card_data['response']}")
-            return
+    if message_id in processed_ids:
+        logging.debug(f"⏩ Already processed message ID: {message_id}")
+        return
 
-        if message.id in processed_ids:
-            logging.debug(f"Skipping already forwarded message ID: {message.id}")
-            return
+    bin_info = await get_bin_data(card_data["cc"][:6])
 
-        bin_info = await get_bin_data(card_data["cc"][:6])
+    formatted_text = (
+        "𝗦𝗵𝗼𝗽𝗶𝗳𝘆 𝗖𝗵𝗮𝗿𝗴𝗲 𝗔𝘂𝘁𝗼 𝗗𝗿𝗼𝗽 24/7\n\n"
+        f"𝗖𝗖: <code>{card_data['cc']}|{card_data['month']}|{card_data['year']}|{card_data['cvv']}</code>\n"
+        f"𝗦𝘁𝗮𝘁𝘂𝘀: {card_data['status']}\n"
+        f"𝗥𝗲𝘀𝗽𝗼𝗻𝘀𝗲: {card_data['response']}\n\n"
+        f"𝗕𝗶𝗻: <code>{card_data['cc'][:6]}</code>\n"
+        f"𝗖𝗼𝘂𝗻𝘁𝗿𝘆: <code>{card_data['country']} ({bin_info[1]})</code>\n"
+        f"𝗕𝗮𝗻𝗸: <code>{card_data['bank']} ({bin_info[2]})</code>\n"
+        f"𝗧𝘆𝗽𝗲: <code>{bin_info[3]}</code>\n"
+        f"𝗟𝗲𝘃𝗲𝗹: <code>{card_data['level']} ({bin_info[4]})</code>\n\n"
+        f"𝗧𝗼𝗼𝗸: {card_data['took']}\n"
+        "𝗣𝗿𝗼𝘃𝗶𝗱𝗲𝗱 𝗯𝘆: 𝗕𝘂𝗻𝗻𝘆"
+    )
 
-        formatted_text = (
-            "𝗦𝗵𝗼𝗽𝗶𝗳𝘆 𝗖𝗵𝗮𝗿𝗴𝗲 𝗔𝘂𝘁𝗼 𝗗𝗿𝗼𝗽 24/7\n\n"
-            f"𝗖𝗖: <code>{card_data['cc']}|{card_data['month']}|{card_data['year']}|{card_data['cvv']}</code>\n"
-            f"𝗦𝘁𝗮𝘁𝘂𝘀: {card_data['status']}\n"
-            f"𝗥𝗲𝘀𝗽𝗼𝗻𝘀𝗲: {card_data['response']}\n\n"
-            f"𝗕𝗶𝗻: <code>{card_data['cc'][:6]}</code>\n"
-            f"𝗖𝗼𝘂𝗻𝘁𝗿𝘆: <code>{card_data['country']} ({bin_info[1]})</code>\n"
-            f"𝗕𝗮𝗻𝗸: <code>{card_data['bank']} ({bin_info[2]})</code>\n"
-            f"𝗧𝘆𝗽𝗲: <code>{bin_info[3]}</code>\n"
-            f"𝗟𝗲𝘃𝗲𝗹: <code>{card_data['level']} ({bin_info[4]})</code>\n\n"
-            f"𝗧𝗼𝗼𝗸: {card_data['took']}\n"
-            "𝗣𝗿𝗼𝘃𝗶𝗱𝗲𝗱 𝗯𝘆: 𝗕𝘂𝗻𝗻𝘆"
-        )
+    if await send_to_channels(formatted_text):
+        processed_ids.add(message_id)
+        logging.info("✅ Forwarded successfully.")
 
-        if await send_to_channels(formatted_text):
-            processed_ids.add(message.id)
-            logging.info("✅ Forwarded successfully.")
-        else:
-            logging.error("❌ Failed to forward.")
-
-    except Exception as e:
-        logging.error(f"Error handling message: {str(e)}")
-
-# === HANDLE NEW & EDITED MESSAGES ===
+# === MESSAGE HANDLERS ===
 @app.on_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
-async def on_new_message(client, message):
-    await handle_card_messages(client, message)
+async def on_new_message(client, message: Message):
+    text = message.text or message.caption or ""
+    message_cache[message.id] = text
+    logging.info(f"[NEW MSG] {text[:80]}")
+    await process_message(message.id, text)
 
 @app.on_edited_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
-async def on_edited_message(client, message):
-    await handle_card_messages(client, message)
+async def on_edited_message(client, message: Message):
+    new_text = message.text or message.caption or ""
+    old_text = message_cache.get(message.id, "")
+    combined = old_text + "\n" + new_text
+    message_cache[message.id] = combined  # update
+    logging.info(f"[EDITED MSG] {new_text[:80]}")
+    await process_message(message.id, combined)
 
 # === START ===
 logging.info("🚀 Starting Card Tracker Bot...")
