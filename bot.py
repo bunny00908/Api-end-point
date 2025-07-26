@@ -121,7 +121,7 @@ async def send_to_channels(formatted_text):
 
 @app.on_message(
     (filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS)) & 
-    ~filters.edited
+    ~filters.edited_message  # Changed from ~filters.edited
 )
 async def handle_card_messages(client, message: Message):
     try:
