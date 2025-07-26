@@ -119,14 +119,16 @@ async def send_to_channels(formatted_text):
             logging.error(f"Failed to send to {channel}: {str(e)}")
     return False
 
-@app.on_message(
-    (filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS)) & 
-    ~filters.edited_message  # Changed from ~filters.edited
-)
+# Updated message handler without edited message filter
+@app.on_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
 async def handle_card_messages(client, message: Message):
     try:
         # Skip if we've already processed this message
         if message.id in processed_ids:
+            return
+        
+        # Skip if message is edited (alternative method)
+        if message.edit_date:
             return
         
         text = message.text or message.caption or ""
