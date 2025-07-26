@@ -10,24 +10,17 @@ API_ID = 28232616
 API_HASH = "82e6373f14a917289086553eefc64afe"
 BOT_TOKEN = "8463287566:AAEHL1B2iCL0EcTpKN9soRKncHMAudBuAvs"
 
-# Monitoring targets
-CARD_CHECK_BOT_ID = 5366864997  # The bot that checks cards
-SOURCE_GROUPS = [-4759483285]  # Your source group ID(s)
-TARGET_CHANNELS = ["@hybuabu"]  # Your channel(s)
+CARD_CHECK_BOT_ID = 5366864997
+SOURCE_GROUPS = [-4759483285]
+TARGET_CHANNELS = ["@hybuabu"]
 
-# Track processed messages
 processed_ids = set()
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-
-# ======================
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Client("card_tracker", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# === BIN LOOKUP ===
 async def get_bin_data(bin_code):
-    """Enhanced BIN lookup with better error handling"""
     url = f"https://bins.antipublic.cc/bins/{bin_code}"
     try:
         async with aiohttp.ClientSession() as session:
@@ -41,50 +34,34 @@ async def get_bin_data(bin_code):
                         data.get("type", "Unknown"),
                         data.get("level", "Unknown")
                     ]
-                logging.warning(f"BIN API responded with status {resp.status}")
     except Exception as e:
         logging.error(f"BIN lookup failed: {str(e)}")
     return [bin_code, "Unknown", "Unknown", "Unknown", "Unknown"]
 
+# === PARSE FUNCTION ===
 def parse_message(text):
-    """Parse card check results from both bots and groups"""
     try:
-        # Extract CC information (multiple formats)
-        cc_match = re.search(
-            r'(?:Card|CC):?\s*(\d{13,19})[| ](\d{1,2})[| ](\d{2,4})[| ](\d{3,4})', 
-            text
-        )
+        cc_match = re.search(r'(?:Card|CC):?\s*(\d{13,19})[| ](\d{1,2})[| ](\d{2,4})[| ](\d{3,4})', text)
         if not cc_match:
             return None
-        
-        # Extract status and response (multiple formats)
-        status = "N/A"
-        response = "N/A"
-        
-        status_match = re.search(r'Status:\s*(.+?)(?:\s|$)', text, re.IGNORECASE)
-        if status_match:
-            status = status_match.group(1).strip()
-            
-        response_match = re.search(r'Response:\s*(.+?)(?:\s|$)', text, re.IGNORECASE)
-        if response_match:
-            response = response_match.group(1).strip()
-        
-        # Extract other details (if available)
-        bank = re.search(r'Bank:\s*(.+?)(?:\s|$)', text, re.IGNORECASE)
-        country = re.search(r'Country:\s*(.+?)(?:\s|$)', text, re.IGNORECASE)
-        level = re.search(r'Level:\s*(.+?)(?:\s|$)', text, re.IGNORECASE)
+
+        status = re.search(r'Status:\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
+        response = re.search(r'Response:\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
+        bank = re.search(r'Bank:\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
+        country = re.search(r'Country:\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
+        level = re.search(r'Level:\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
         took = re.search(r'Took:\s*([\d.]+)', text, re.IGNORECASE)
-        
+
         return {
             "cc": cc_match.group(1),
             "month": cc_match.group(2),
             "year": cc_match.group(3),
             "cvv": cc_match.group(4),
-            "status": status,
-            "response": response,
-            "bank": bank.group(1) if bank else "Unknown",
-            "country": country.group(1) if country else "Unknown",
-            "level": level.group(1) if level else "Unknown",
+            "status": status.group(1).strip() if status else "N/A",
+            "response": response.group(1).strip() if response else "N/A",
+            "bank": bank.group(1).strip() if bank else "Unknown",
+            "country": country.group(1).strip() if country else "Unknown",
+            "level": level.group(1).strip() if level else "Unknown",
             "took": f"{took.group(1)}s" if took else "N/A"
         }
     except Exception as e:
@@ -92,19 +69,16 @@ def parse_message(text):
         return None
 
 def should_forward(response):
-    """Determine if we should forward this card"""
     response = (response or "").upper()
-    return any(keyword in response for keyword in ["CHARGED", "APPROVED", "SUCCESS", "LIVE"])
+    return any(x in response for x in ["CHARGED", "APPROVED", "SUCCESS", "LIVE"])
 
 async def send_to_channels(formatted_text):
-    """Handle sending to all channels with error handling"""
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔄 Scraper", url="https://t.me/ApprovedScrapper1"),
             InlineKeyboardButton("📦 Backup", url="https://t.me/YourBackupChannel")
         ]
     ])
-    
     for channel in TARGET_CHANNELS:
         try:
             await app.send_message(
@@ -113,47 +87,31 @@ async def send_to_channels(formatted_text):
                 parse_mode=ParseMode.HTML,
                 reply_markup=buttons
             )
-            logging.info(f"Successfully sent to {channel}")
+            logging.info(f"Sent to {channel}")
             return True
         except Exception as e:
-            logging.error(f"Failed to send to {channel}: {str(e)}")
+            logging.error(f"Send failed to {channel}: {str(e)}")
     return False
 
-# Updated message handler without edited message filter
-@app.on_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
+# === MAIN MESSAGE HANDLER ===
 async def handle_card_messages(client, message: Message):
     try:
-        # Skip if we've already processed this message
         if message.id in processed_ids:
-            return
-        
-        # Skip if message is edited (alternative method)
-        if message.edit_date:
-            return
-        
+            return  # Already handled
+
         text = message.text or message.caption or ""
-        logging.info(f"Processing message from {message.chat.id}: {text[:100]}...")
-        
-        # Skip "wait" or "checking" messages
-        if any(x in text.lower() for x in ["wait", "checking", "processing"]):
-            logging.debug("Skipping processing message")
-            return
-        
-        # Parse the message
         card_data = parse_message(text)
+
         if not card_data:
-            logging.debug("Message doesn't contain valid card info")
+            logging.info("No card data found in message")
             return
-        
-        # Check if we should forward this card
+
         if not should_forward(card_data["response"]):
-            logging.debug(f"Skipping card with response: {card_data['response']}")
+            logging.info(f"Card not valid for forward: {card_data['response']}")
             return
-        
-        # Get BIN info
+
         bin_info = await get_bin_data(card_data["cc"][:6])
-        
-        # Format the message
+
         formatted_text = (
             "𝗦𝗵𝗼𝗽𝗶𝗳𝘆 𝗖𝗵𝗮𝗿𝗴𝗲 𝗔𝘂𝘁𝗼 𝗗𝗿𝗼𝗽 24/7\n\n"
             f"𝗖𝗖: <code>{card_data['cc']}|{card_data['month']}|{card_data['year']}|{card_data['cvv']}</code>\n"
@@ -167,21 +125,24 @@ async def handle_card_messages(client, message: Message):
             f"𝗧𝗼𝗼𝗸: {card_data['took']}\n"
             "𝗣𝗿𝗼𝘃𝗶𝗱𝗲𝗱 𝗯𝘆: 𝗕𝘂𝗻𝗻𝘆"
         )
-        
-        # Send to channels
+
         if await send_to_channels(formatted_text):
             processed_ids.add(message.id)
-            logging.info("Card successfully processed and forwarded")
-        else:
-            logging.error("Failed to send to all channels")
-            
-    except Exception as e:
-        logging.error(f"Error processing message: {str(e)}")
+            logging.info("✅ Message forwarded")
 
-# === START BOT ===
+    except Exception as e:
+        logging.error(f"Handle error: {e}")
+
+# === HANDLE NEW AND EDITED MESSAGES ===
+@app.on_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
+async def on_new_message(client, message):
+    await handle_card_messages(client, message)
+
+@app.on_edited_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
+async def on_edited_message(client, message):
+    await handle_card_messages(client, message)
+
+# === START ===
 logging.info("Starting Card Tracker Bot...")
-print("✅ Bot is now running and monitoring:")
-print(f"- Card Check Bot ID: {CARD_CHECK_BOT_ID}")
-print(f"- Source Groups: {SOURCE_GROUPS}")
-print(f"- Target Channels: {TARGET_CHANNELS}")
+print("✅ Bot running...")
 app.run()
