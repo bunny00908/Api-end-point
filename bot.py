@@ -13,7 +13,7 @@ BOT_TOKEN = "8463287566:AAEHL1B2iCL0EcTpKN9soRKncHMAudBuAvs"
 # Monitoring targets
 CARD_CHECK_BOT_ID = 5366864997  # The bot that checks cards
 SOURCE_GROUPS = [-4759483285]  # Your source group ID(s)
-TARGET_CHANNELS = ["@hyhhuy"]  # Your channel(s)
+TARGET_CHANNELS = ["@hybuabu"]  # Your channel(s)
 
 # Track processed messages
 processed_ids = set()
