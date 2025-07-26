@@ -81,7 +81,7 @@ def parse_message(text):
 # === FORWARD DECISION ===
 def should_forward(response):
     response = (response or "").lower()
-    return any(keyword in response for keyword in ["charged", "approved", "success", "live"])
+    return any(keyword in response for keyword in ["charge", "charged", "approved", "success", "live"])
 
 # === SEND TO CHANNEL ===
 async def send_to_channels(formatted_text):
@@ -108,9 +108,6 @@ async def send_to_channels(formatted_text):
 # === MAIN HANDLER ===
 async def handle_card_messages(client, message: Message):
     try:
-        if message.id in processed_ids:
-            return
-
         text = message.text or message.caption or ""
         logging.info(f"[MSG] {text[:80]}...")
 
@@ -119,8 +116,13 @@ async def handle_card_messages(client, message: Message):
             logging.debug("No card data parsed.")
             return
 
+        logging.debug(f"Parsed response: {card_data['response']}")
         if not should_forward(card_data["response"]):
             logging.debug(f"Not forwarding: {card_data['response']}")
+            return
+
+        if message.id in processed_ids:
+            logging.debug(f"Skipping already forwarded message ID: {message.id}")
             return
 
         bin_info = await get_bin_data(card_data["cc"][:6])
