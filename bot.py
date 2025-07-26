@@ -15,8 +15,14 @@ SOURCE_GROUPS = [-4759483285]
 TARGET_CHANNELS = ["@hybuabu"]
 
 processed_ids = set()
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# === LOGGING ===
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# === APP START ===
 app = Client("card_tracker", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # === BIN LOOKUP ===
@@ -41,7 +47,11 @@ async def get_bin_data(bin_code):
 # === PARSE FUNCTION ===
 def parse_message(text):
     try:
-        cc_match = re.search(r'(?:Card|CC):?\s*(\d{13,19})[| ](\d{1,2})[| ](\d{2,4})[| ](\d{3,4})', text)
+        logging.debug(f"Parsing message: {text}")
+        cc_match = re.search(
+            r'CC[:\s]*([0-9]{13,19})[| ](\d{1,2})[| ](\d{2,4})[| ](\d{3,4})',
+            text, re.IGNORECASE
+        )
         if not cc_match:
             return None
 
@@ -68,10 +78,12 @@ def parse_message(text):
         logging.error(f"Error parsing message: {str(e)}")
         return None
 
+# === FORWARD DECISION ===
 def should_forward(response):
-    response = (response or "").upper()
-    return any(x in response for x in ["CHARGED", "APPROVED", "SUCCESS", "LIVE"])
+    response = (response or "").lower()
+    return any(keyword in response for keyword in ["charged", "approved", "success", "live"])
 
+# === SEND TO CHANNEL ===
 async def send_to_channels(formatted_text):
     buttons = InlineKeyboardMarkup([
         [
@@ -87,27 +99,28 @@ async def send_to_channels(formatted_text):
                 parse_mode=ParseMode.HTML,
                 reply_markup=buttons
             )
-            logging.info(f"Sent to {channel}")
+            logging.info(f"✅ Sent to {channel}")
             return True
         except Exception as e:
-            logging.error(f"Send failed to {channel}: {str(e)}")
+            logging.error(f"Failed to send to {channel}: {str(e)}")
     return False
 
-# === MAIN MESSAGE HANDLER ===
+# === MAIN HANDLER ===
 async def handle_card_messages(client, message: Message):
     try:
         if message.id in processed_ids:
-            return  # Already handled
+            return
 
         text = message.text or message.caption or ""
-        card_data = parse_message(text)
+        logging.info(f"[MSG] {text[:80]}...")
 
+        card_data = parse_message(text)
         if not card_data:
-            logging.info("No card data found in message")
+            logging.debug("No card data parsed.")
             return
 
         if not should_forward(card_data["response"]):
-            logging.info(f"Card not valid for forward: {card_data['response']}")
+            logging.debug(f"Not forwarding: {card_data['response']}")
             return
 
         bin_info = await get_bin_data(card_data["cc"][:6])
@@ -128,12 +141,14 @@ async def handle_card_messages(client, message: Message):
 
         if await send_to_channels(formatted_text):
             processed_ids.add(message.id)
-            logging.info("✅ Message forwarded")
+            logging.info("✅ Forwarded successfully.")
+        else:
+            logging.error("❌ Failed to forward.")
 
     except Exception as e:
-        logging.error(f"Handle error: {e}")
+        logging.error(f"Error handling message: {str(e)}")
 
-# === HANDLE NEW AND EDITED MESSAGES ===
+# === HANDLE NEW & EDITED MESSAGES ===
 @app.on_message(filters.user(CARD_CHECK_BOT_ID) | filters.chat(SOURCE_GROUPS))
 async def on_new_message(client, message):
     await handle_card_messages(client, message)
@@ -143,6 +158,6 @@ async def on_edited_message(client, message):
     await handle_card_messages(client, message)
 
 # === START ===
-logging.info("Starting Card Tracker Bot...")
-print("✅ Bot running...")
+logging.info("🚀 Starting Card Tracker Bot...")
+print("✅ Bot is running and tracking edited + new messages...")
 app.run()
